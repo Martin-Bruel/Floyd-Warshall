@@ -16,19 +16,24 @@ typedef struct Matrix
     bool row_opti;
 } Matrix;
 
-int broadcast(int data, int transmitter, int rank, int numprocs);
-Matrix *scatter(Matrix *data, int size, bool row_opti, int transmitter, int rank, int numprocs);
-void gather(int transmitter, int rank, int numprocs, Matrix *matrix);
+int broadcast(int data, int transmitter, int rank, int numprocs);                                   //emmet data sur toutes les machines de l'anneau
+Matrix *scatter(Matrix *data, int size, bool row_opti, int transmitter, int rank, int numprocs);    //transmet une part de data à chaque machine de l'anneau
+void gather(int transmitter, int rank, int numprocs, Matrix *matrix);                               //transmet chaque part de data à l'emmeteur
+void process(Matrix *a, Matrix *b, Matrix *c, int rank, int numprocs);                              //rempli c avec le tratement de chaque matrice
 
-Matrix *matrix_product(Matrix *m1, Matrix *m2);
 
-void set(Matrix *matrix, int row, int column, long value);
-long get(Matrix *matrix, int row, int column);
+Matrix *matrix_product(Matrix *m1, Matrix *m2);                                                     //retourne le produit matriciel entre a et b
+void replace(Matrix *a, Matrix *b, int row, int column);                                            //remplace a par la matrice b à l'index donné
 
-Matrix *generate_matrix(long *data, int h, int w, bool row_opti);
-Matrix *create_matrix(int h, int w, bool row_opti);
-void display_array(long *array, int size);
-void display_matrix(Matrix *m);
+void set(Matrix *matrix, int row, int column, long value);                                          //assigne la valeur dans la bonne case de la matrice
+long get(Matrix *matrix, int row, int column);                                                      //retourne la valeur à la case correspondance
+
+Matrix *generate_matrix(long *data, int h, int w, bool row_opti);                                   //genere une matrice
+Matrix *create_matrix(int seed, int h, int w, bool row_opti);                                       //creer une matrice 
+void display_array(long *array, int size);                                                          //affiche le tableau
+void display_matrix(Matrix *m);                                                                     //affiche la matrice
+
+int test(int rank, int numprocs);                                                                   //tests
 
 
 int main(int argc, char *argv[])
@@ -40,12 +45,14 @@ int main(int argc, char *argv[])
     MPI_Comm_size(MPI_COMM_WORLD, &numprocs);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
+    if(argc == 2 && strcmp(argv[1],"test")==0) return test(rank, numprocs);
+
     N = 8;
 
     N = broadcast(N, 0, rank, numprocs);
 
-    A = create_matrix(N,N,true);
-    B = create_matrix(N,N,false);
+    A = create_matrix(0,N,N,true);
+    B = create_matrix(0,N,N,false);
     if(rank == 0) display_matrix(A);
         
     a = scatter(A, N, true, 0, rank, numprocs);
@@ -181,6 +188,19 @@ void gather(int transmitter, int rank, int numprocs, Matrix *matrix)
 }
 
 
+void process(Matrix *a, Matrix *b, Matrix *c, int rank, int numprocs)
+{
+    Matrix *p;
+
+    for(int i = 0; i < numprocs; i++)
+    {
+        p = matrix_product(a,b);
+        replace(c, p, 0, i*numprocs);
+        free(p);
+    }
+}
+
+
 
 
 
@@ -208,10 +228,10 @@ Matrix *generate_matrix(long *data, int h, int w, bool row_opti)
     return m;
 }
 
-Matrix *create_matrix(int h, int w, bool row_opti)
+Matrix *create_matrix(int seed, int h, int w, bool row_opti)
 {
     Matrix *m = generate_matrix((long *) malloc(h*w*sizeof(long)), h,w,row_opti);
-    int i = 1;
+    int i = seed+1;
 
     for(int r = 0; r < m->height; r++)
     {
@@ -263,4 +283,41 @@ Matrix *matrix_product(Matrix *m1, Matrix *m2)
         }
     }
     return res;
+}
+
+
+void replace(Matrix *a, Matrix *b, int row, int column)
+{
+    int rb = 0, cb = 0;
+    for(int ra = row; ra < b->height; ra++)
+    {   
+        for(int ca = column; ca < b->width; ca++)
+        {
+            set(a, ra, ca, get(b,rb,cb++));
+        }
+        cb = 0;
+        rb++;
+    }
+}
+
+int replace_test()
+{
+    Matrix *a = create_matrix(0,4,4,true);
+    Matrix *b = create_matrix(100,4,2,true);
+    replace(a,b,0,0);
+    long tab[16] = {101,102,3,4,103,104,7,8,105,106,11,12,107,108,15,16};
+    return memcmp(tab, a->array, 16);
+}
+
+int test(int rank, int numprocs)  
+{
+    if(rank==0)
+    {
+        if(replace_test()) {
+            printf("Error : 'replace'\n");
+            return 0;
+        }
+        printf("All tests done\n");
+    }
+    return 0;
 }
