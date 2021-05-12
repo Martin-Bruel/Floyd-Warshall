@@ -10,6 +10,7 @@
 
 #define NEXT(r,p) ((r + 1) + p) % p
 #define PREVIOUS(r,p) ((r - 1) + p) % p
+#define CURRENT(r,p) (r + p) % p
 
 typedef struct Matrix
 {
@@ -137,11 +138,9 @@ Matrix *scatter(Matrix *data, int size, bool row_opti, int transmitter, int rank
             //calcule du bloc à envoyé (le dernier bloc est envoyé en premier)
             block = data->array + (numprocs-p) * block_size;                                             
             MPI_Send(block, block_size, MPI_LONG, NEXT(rank, numprocs), SCATTER, MPI_COMM_WORLD);
-            //printf("Rank %d : Send %d data to %d proc\n", rank, block_size, rank+1);
         }
         block = (long *)realloc(data->array, sizeof(long) * block_size);
         free(data);
-        //display_array(block, block_size);
     }
 
     //Dans le cas ou on est une autre machine
@@ -156,13 +155,9 @@ Matrix *scatter(Matrix *data, int size, bool row_opti, int transmitter, int rank
         for(int i = rank; i < numprocs - 1; i++)
         {
             MPI_Recv(block, block_size, MPI_LONG, PREVIOUS(rank, numprocs), SCATTER, MPI_COMM_WORLD, &status);
-            //printf("Rank %d : Receive %d data from %d proc\n", rank, block_size, (rank-1) + numprocs % numprocs);
-            //printf("Rank %d : Send %d data to %d proc\n", rank, block_size, rank+1);
             MPI_Send(block, block_size, MPI_LONG, NEXT(rank, numprocs), SCATTER, MPI_COMM_WORLD);
         }
-        //printf("Rank %d : Receive %d data from %d proc\n", rank, block_size, (rank-1) + numprocs % numprocs);
         MPI_Recv(block, block_size, MPI_LONG, PREVIOUS(rank, numprocs), SCATTER, MPI_COMM_WORLD, &status);
-        //display_array(block, block_size);
     }
 
 
@@ -199,13 +194,10 @@ void gather(int transmitter, int rank, int numprocs, Matrix *matrix)
     //On envoie leurs blocks 
     else
     {
-        //printf("Rank %d : Send %d data to %d proc\n", rank, block_size, (rank+1) % numprocs);
         MPI_Send(block, block_size, MPI_LONG, (rank+1) % numprocs, GATHER, MPI_COMM_WORLD);
         for(int i = numprocs - rank; i < numprocs - 1; i++)
         {
             MPI_Recv(block, block_size, MPI_LONG, PREVIOUS(rank, numprocs), GATHER, MPI_COMM_WORLD, &status);
-            //printf("Rank %d : Receive %d data from %d proc\n", rank, block_size, (rank-1) + numprocs % numprocs);
-            //printf("Rank %d : Send %d data to %d proc\n", rank, block_size, (rank+1) % numprocs);
             MPI_Send(block, block_size, MPI_LONG, NEXT(rank, numprocs), GATHER, MPI_COMM_WORLD);
         }
     }
@@ -217,28 +209,33 @@ void process(Matrix *a, Matrix *b, Matrix *c, int rank, int numprocs)
     Matrix *p;
     long *tmp;
     MPI_Status status;
+    int i = 0;
 
+    //On fait le produit des 2 matrices
     p = matrix_product(a,b);
-    replace(c, p, 0, 0);
+
+    //On remplace dans la matrice résultante la multiplication trouvée
+    //à l'emplacement déterminé celon le rank, l'iteration et la taille d'un bloc
+    replace(c, p, 0, CURRENT(rank+i++,numprocs)*a->width/numprocs);
     free(p);
 
-    for(int i = 1; i < numprocs; i++)
+    for(; i < numprocs; i++)
     {
-        
+
         if(rank % 2 == 0)
         {
-            MPI_Send(b->array, size(b), MPI_LONG, NEXT(rank, numprocs), GATHER, MPI_COMM_WORLD);
-            MPI_Recv(b->array, size(b), MPI_LONG, PREVIOUS(rank, numprocs), GATHER, MPI_COMM_WORLD, &status);
+            MPI_Send(b->array, size(b), MPI_LONG, PREVIOUS(rank, numprocs), GATHER, MPI_COMM_WORLD);
+            MPI_Recv(b->array, size(b), MPI_LONG, NEXT(rank, numprocs), GATHER, MPI_COMM_WORLD, &status);
         }
         else
         {
             tmp = (long *) malloc(size(b)*sizeof(long));
-            MPI_Recv(tmp, size(b), MPI_LONG, PREVIOUS(rank, numprocs), GATHER, MPI_COMM_WORLD, &status);
-            MPI_Send(b->array, size(b), MPI_LONG, NEXT(rank, numprocs), GATHER, MPI_COMM_WORLD);
+            MPI_Recv(tmp, size(b), MPI_LONG, NEXT(rank, numprocs), GATHER, MPI_COMM_WORLD, &status);
+            MPI_Send(b->array, size(b), MPI_LONG, PREVIOUS(rank, numprocs), GATHER, MPI_COMM_WORLD);
             b->array=tmp;
         }
         p = matrix_product(a,b);
-        replace(c, p, 0, i*a->width/numprocs);
+        replace(c, p, 0, CURRENT(rank+i,numprocs)*a->width/numprocs);
         free(p);
     }
     
