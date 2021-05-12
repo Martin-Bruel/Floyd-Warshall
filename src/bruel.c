@@ -371,17 +371,17 @@ int replace_test()
     Matrix *b = create_matrix(100,4,2,true);
     replace(a,b,0,0);
     long tab1[16] = {101,102,3,4,103,104,7,8,105,106,11,12,107,108,15,16};
-    if(memcmp(tab1, a->array, 16)) return 1;
+    if(memcmp(tab1, a->array, 16*sizeof(long))) return 1;
 
     a = create_matrix(0,2,8,true);
     b = create_matrix(100,2,2,true);
     replace(a,b,0,2);
-    long tab2[16] = {1,2,101,102,5,6,7,8,9,10,102,103,13,14,15,16};
-    if(memcmp(tab2, a->array, 16)) return 1;
+    long tab2[16] = {1,2,101,102,5,6,7,8,9,10,103,104,13,14,15,16};
+    if(memcmp(tab2, a->array, 16*sizeof(long))) return 1;
     b = create_matrix(100,2,2,true);
     replace(a,b,0,4);
-    long tab3[16] = {1,2,101,102,101,102,7,8,9,10,102,103,102,103,15,16};
-    if(memcmp(tab3, a->array, 16)) return 1;
+    long tab3[16] = {1,2,101,102,101,102,7,8,9,10,103,104,103,104,15,16};
+    if(memcmp(tab3, a->array, 16*sizeof(long))) return 1;
     return 0;
 }
 
@@ -399,15 +399,28 @@ int next_previous_test()
     return 0;
 }
 
+int run_test(char *test_name, int (*test_fnct)(), int id)
+{
+    if(test_fnct()) 
+    {
+        printf("\033[0;31mTest %d failed : '%s'\n\033[0m", id, test_name);
+        return 1;
+    }
+    else 
+    {
+        printf("\033[0;32mTest %d pass : '%s'\n\033[0m", id, test_name);
+        return 0;
+    }
+}
+
 int test(int rank, int numprocs)  
 {
     int nb_failed = 0;
     if(rank==0)
     {
-        if(nb_failed+=replace_test()) printf("Error : 'replace'\n");
-        if(nb_failed+=next_previous_test()) printf("Error : 'next_previous'\n");
-        
-        printf("%d tests failed\n", nb_failed);
+        nb_failed+=run_test("replace", replace_test, 1);
+        nb_failed+=run_test("next_previous", next_previous_test, 1);
+        printf("%d test failed.\n", nb_failed);
     }
     return 0;
 }
