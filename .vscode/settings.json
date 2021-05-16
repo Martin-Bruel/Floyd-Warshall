@@ -3,7 +3,9 @@
         "array": "c",
         "string": "c",
         "string_view": "c",
-        "*.tcc": "c"
+        "*.tcc": "c",
+        "initializer_list": "c",
+        "utility": "c"
     },
     "C_Cpp.intelliSenseEngineFallback": "Enabled"
 }

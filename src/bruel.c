@@ -28,7 +28,7 @@ typedef struct Matrix
 //Fonctions de haut niveau
 int broadcast(int data, int transmitter, int rank, int numprocs);                                   //emmet data sur toutes les machines de l'anneau
 Matrix *scatter(Matrix *data, int size, bool row_opti, int transmitter, int rank, int numprocs);    //transmet une part de data à chaque machine de l'anneau
-void gather(int transmitter, int rank, int numprocs, Matrix *matrix);                               //transmet chaque part de data à l'emmeteur
+Matrix *gather(int transmitter, int rank, int numprocs, Matrix *matrix);                               //transmet chaque part de data à l'emmeteur
 void process(Matrix *a, Matrix *b, Matrix *c, int rank, int numprocs);                              //rempli c avec le tratement de chaque matrice
 
 //Matrice manipulation
@@ -45,6 +45,7 @@ void display_matrix(Matrix *m);                                                 
 //Creation matrice
 Matrix *generate_matrix(long *data, int h, int w, bool row_opti);                                   //genere une matrice
 Matrix *create_matrix(int seed, int h, int w, bool row_opti);                                       //creer une matrice 
+Matrix *load_matrix(char *path);                                                                    //charge une matrice depuis un fichier
 
 //Tests
 int test(int rank, int numprocs);                                                                   //tests
@@ -59,7 +60,7 @@ int test(int rank, int numprocs);                                               
 int main(int argc, char *argv[])
 {
     int rank, numprocs, N;
-    Matrix *A, *B, *a, *b, *c;
+    Matrix *A, *B, *C, *a, *b, *c;
 
     MPI_Init(&argc, &argv);
     MPI_Comm_size(MPI_COMM_WORLD, &numprocs);
@@ -81,17 +82,13 @@ int main(int argc, char *argv[])
     c = generate_matrix((long *) malloc(size(a)*sizeof(long)), a->height, a->width, a->row_opti);
 
     process(a,b,c,rank,numprocs);
-
-    MPI_Barrier(MPI_COMM_WORLD);
-    printf("RANK : %d\n",rank);
-    display_matrix(c);
-    fflush(stdout);
-
-
     
-    //gather(0,rank,numprocs,A);
+    C = gather(0,rank,numprocs,c);
+    if(rank == 0)
+    {
+        display_matrix(C);
+    }
     
-
     MPI_Finalize();
     return 0;
 }
@@ -166,10 +163,11 @@ Matrix *scatter(Matrix *data, int size, bool row_opti, int transmitter, int rank
     else return generate_matrix(block, size, block_size / size, row_opti);
 }
 
-void gather(int transmitter, int rank, int numprocs, Matrix *matrix)
+Matrix *gather(int transmitter, int rank, int numprocs, Matrix *matrix)
 {
     MPI_Status status;
-    int block_size = matrix->width * matrix->height;
+    Matrix *result;
+    int block_size = size(matrix);
     long *block = matrix->array;
 
     //Dans le cas ou on est l'emmetteur
@@ -179,14 +177,13 @@ void gather(int transmitter, int rank, int numprocs, Matrix *matrix)
     if(rank==transmitter)
     {
         int size = block_size*numprocs;
-        Matrix *result = generate_matrix(malloc(size*sizeof(long)),matrix->width, matrix->width, true);
+        result = generate_matrix(malloc(size*sizeof(long)),matrix->width, matrix->width, true);
         memmove(result->array,block, block_size * sizeof(long));
         for(int p = 1; p < numprocs; p++)
         {
             MPI_Recv(block, block_size, MPI_LONG, PREVIOUS(rank, numprocs), GATHER, MPI_COMM_WORLD, &status);
             memmove(result->array + (numprocs-p) * block_size, block, block_size  * sizeof(long));
         }
-        display_matrix(result);
     }
     //Dans le cas ou on est une autre machine
     //On envoie notre block au suivant
@@ -201,6 +198,7 @@ void gather(int transmitter, int rank, int numprocs, Matrix *matrix)
             MPI_Send(block, block_size, MPI_LONG, NEXT(rank, numprocs), GATHER, MPI_COMM_WORLD);
         }
     }
+    return result;
 }
 
 
@@ -354,6 +352,30 @@ Matrix *create_matrix(int seed, int h, int w, bool row_opti)
     return m;
 }
 
+Matrix *load_matrix(char *path)
+{
+    FILE * file;
+    long val;
+    int size_alloc = 256;
+    int size;
+
+    file = fopen(path, "r");
+    if(file==NULL) return NULL;
+
+    long *data = (long *) malloc(size_alloc*sizeof(long));
+
+    for(size = 0; fscanf(file, " %ld", &val); size++)
+    {
+        if(size > size_alloc)
+        {
+            size_alloc=size_alloc*size_alloc;
+            data = realloc(data, size_alloc*sizeof(long));
+        }
+        data[size] = val; 
+    }
+    fclose(file);
+    return generate_matrix(data, 1, size, true); 
+}
 
 
 
@@ -396,6 +418,14 @@ int next_previous_test()
     return 0;
 }
 
+int load_matrix_test()
+{
+    Matrix *m = load_matrix("../data/mat_2");
+    long tab1[16] = {0, 1, 2, 0, 0, 0, 0, 1, 0, 3, 0, 6, 0, 0, 0, 0};
+    if(memcmp(tab1, m->array, 16*sizeof(long))) return 1;
+    return 0;
+}
+
 int run_test(char *test_name, int (*test_fnct)(), int id)
 {
     if(test_fnct()) 
@@ -412,11 +442,12 @@ int run_test(char *test_name, int (*test_fnct)(), int id)
 
 int test(int rank, int numprocs)  
 {
-    int nb_failed = 0;
+    int nb_failed = 0, id = 0;
     if(rank==0)
     {
-        nb_failed+=run_test("replace", replace_test, 1);
-        nb_failed+=run_test("next_previous", next_previous_test, 1);
+        nb_failed+=run_test("replace", replace_test, ++id);
+        nb_failed+=run_test("next_previous", next_previous_test, ++id);
+        nb_failed+=run_test("load_matrix", load_matrix_test, ++id);
         printf("%d test failed.\n", nb_failed);
     }
     return 0;
