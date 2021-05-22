@@ -1,6 +1,6 @@
 ## Build
 
-```mpicc -o bin/bruel src/bruel.c -Wall```
+```mpicc -o bin/bruel src/bruel.c -Wall -lm```
 
 ## Test
 

@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #define GATHER 1
 #define SCATTER 2
@@ -66,7 +67,12 @@ int main(int argc, char *argv[])
     MPI_Comm_size(MPI_COMM_WORLD, &numprocs);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-    if(argc == 2 && strcmp(argv[1],"test")==0) return test(rank, numprocs);
+    if(argc == 2 && strcmp(argv[1],"test")==0)
+    {
+        test(rank, numprocs);
+        MPI_Finalize();
+        return 0;
+    }
 
     N = 8;
 
@@ -357,24 +363,24 @@ Matrix *load_matrix(char *path)
     FILE * file;
     long val;
     int size_alloc = 256;
-    int size;
+    int size=0;
 
     file = fopen(path, "r");
     if(file==NULL) return NULL;
 
     long *data = (long *) malloc(size_alloc*sizeof(long));
 
-    for(size = 0; fscanf(file, " %ld", &val); size++)
+    while(fscanf(file, " %ld", &val) == 1)
     {
-        if(size > size_alloc)
+        if(size == size_alloc)
         {
             size_alloc=size_alloc*size_alloc;
             data = realloc(data, size_alloc*sizeof(long));
         }
-        data[size] = val; 
+        data[size++] = val; 
     }
     fclose(file);
-    return generate_matrix(data, 1, size, true); 
+    return generate_matrix(data, sqrt(size), sqrt(size), true); 
 }
 
 
@@ -420,9 +426,24 @@ int next_previous_test()
 
 int load_matrix_test()
 {
-    Matrix *m = load_matrix("../data/mat_2");
+    Matrix *m = load_matrix("data/mat_2");
+    if(m == NULL) return 1;
     long tab1[16] = {0, 1, 2, 0, 0, 0, 0, 1, 0, 3, 0, 6, 0, 0, 0, 0};
     if(memcmp(tab1, m->array, 16*sizeof(long))) return 1;
+    free(m);
+    m = load_matrix("data/mat_3");
+    long tab2[64] = {   
+                        0, 4, 2, 0, 6, 9, 0, 8, 
+                        6, 0, 2, 0, 9, 2, 0, 8, 
+                        2, 1, 0, 8, 4, 0, 4, 2, 
+                        4, 6, 3, 0, 4, 0, 3, 8, 
+                        7, 8, 1, 0, 0, 9, 3, 0, 
+                        3, 8, 8, 1, 8, 0, 0, 7, 
+                        0, 2, 9, 3, 3, 4, 0, 6, 
+                        6, 4, 5, 2, 3, 1, 7, 0 
+                    };
+    if(memcmp(tab2, m->array, 64*sizeof(long))) return 1;
+    free(m);
     return 0;
 }
 
