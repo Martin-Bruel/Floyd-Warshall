@@ -47,6 +47,7 @@ void display_matrix(Matrix *m);                                                 
 Matrix *generate_matrix(long *data, int h, int w, bool row_opti);                                   //genere une matrice
 Matrix *create_matrix(int seed, int h, int w, bool row_opti);                                       //creer une matrice 
 Matrix *load_matrix(char *path);                                                                    //charge une matrice depuis un fichier
+Matrix *copy_matrix(Matrix *m, bool row_opti);                                                      //copy une matrix avec l'optimisation demandée
 
 //Tests
 int test(int rank, int numprocs);                                                                   //tests
@@ -67,19 +68,27 @@ int main(int argc, char *argv[])
     MPI_Comm_size(MPI_COMM_WORLD, &numprocs);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-    if(argc == 2 && strcmp(argv[1],"test")==0)
+    if(argc != 2) 
+    {
+        if(rank == 0) printf("Program is call with wrong numbers of argument... exit\n");
+        MPI_Finalize();
+        return 0;
+    }
+    if(strcmp(argv[1],"test")==0)
     {
         test(rank, numprocs);
         MPI_Finalize();
         return 0;
     }
-
-    N = 8;
+    if(rank == 0)
+    {
+        A = load_matrix(argv[1]);
+        B = copy_matrix(A, false);
+        N = A->height;
+    }
 
     N = broadcast(N, 0, rank, numprocs);
 
-    A = create_matrix(0,N,N,true);
-    B = create_matrix(0,N,N,false);
     if(rank == 0) display_matrix(A);
         
     a = scatter(A, N, true, 0, rank, numprocs);
@@ -381,6 +390,21 @@ Matrix *load_matrix(char *path)
     }
     fclose(file);
     return generate_matrix(data, sqrt(size), sqrt(size), true); 
+}
+
+
+Matrix *copy_matrix(Matrix *m, bool row_opti)
+{
+    Matrix *copy = generate_matrix((long *) malloc(size(m)*sizeof(long)), m->height, m->width, row_opti);
+    
+    for(int r = 0; r < m->height; r++)
+    {
+        for(int c = 0; c < m->width; c++)
+        {
+            set(copy,r,c,get(m,r,c));
+        }
+    }
+    return copy;
 }
 
 

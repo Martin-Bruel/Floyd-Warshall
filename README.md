@@ -8,4 +8,4 @@
 
 ## Run
 
-```mpirun -np 4 ./bin/bruel```
+```mpirun -np 4 ./bin/bruel data/mat_2```
