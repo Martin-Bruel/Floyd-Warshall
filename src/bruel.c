@@ -30,19 +30,19 @@ typedef struct Matrix
 //Fonctions de haut niveau
 int broadcast(int data, int transmitter, int rank, int numprocs);                                   //emmet data sur toutes les machines de l'anneau
 Matrix *scatter(Matrix *data, int size, bool row_opti, int transmitter, int rank, int numprocs);    //transmet une part de data à chaque machine de l'anneau
-Matrix *gather(int transmitter, int rank, int numprocs, Matrix *matrix);                               //transmet chaque part de data à l'emmeteur
+Matrix *gather(int transmitter, int rank, int numprocs, Matrix *matrix);                            //transmet chaque part de data à l'emmeteur
 void process(Matrix *a, Matrix *b, Matrix *c, int rank, int numprocs);                              //rempli c avec le tratement de chaque matrice
 
 //Matrice manipulation
 Matrix *matrix_product(Matrix *m1, Matrix *m2);                                                     //retourne le produit matriciel entre a et b
 Matrix *matrix_process(Matrix *m1, Matrix *m2);                                                     //retourne le produit matriciel en remplacant l'opération de multiplication par une addition et l'opération de somme par le minimum 
 void replace(Matrix *a, Matrix *b, int row, int column);                                            //remplace a par la matrice b à l'index donné
-void matrix_transform(Matrix *m);
+void matrix_transform(Matrix *m);                                                                   //tranforme matrix to add +inf
 
 //Utils
 void set(Matrix *matrix, int row, int column, long value);                                          //assigne la valeur dans la bonne case de la matrice
 long get(Matrix *matrix, int row, int column);                                                      //retourne la valeur à la case correspondance
-int size(Matrix *matrix);
+int size(Matrix *matrix);                                                                           //retourne le nombre d'element d'une matrice
 void display_array(long *array, int size);                                                          //affiche le tableau
 void display_matrix(Matrix *m);                                                                     //affiche la matrice
 
@@ -92,8 +92,6 @@ int main(int argc, char *argv[])
 
     N = broadcast(N, 0, rank, numprocs);
 
-    if(rank == 0) display_matrix(A);
-
     for(int i = 0; i < log2(N); i++)
     {
         if(rank==0)
@@ -106,19 +104,11 @@ int main(int argc, char *argv[])
 
         c = generate_matrix((long *) malloc(size(a)*sizeof(long)), a->height, a->width, a->row_opti);
 
-        process(a,b,c,rank,numprocs);
-        fflush(stdout);
-        printf("rank %d\n", rank);
-        display_matrix(c);
+        process(a,b,c,rank,numprocs);        
     
         A = gather(0,rank,numprocs,c);
     }
-    if(rank == 0)
-    {
-        display_matrix(A);
-    }
-        
-    
+    if(rank == 0) display_matrix(A);
     
     MPI_Finalize();
     return 0;
@@ -241,7 +231,7 @@ void process(Matrix *a, Matrix *b, Matrix *c, int rank, int numprocs)
     int i = 0;
 
     //On fait le produit des 2 matrices
-    p = matrix_product(a,b);
+    p = matrix_process(a,b);
 
     //On remplace dans la matrice résultante la multiplication trouvée
     //à l'emplacement déterminé celon le rank, l'iteration et la taille d'un bloc
@@ -377,8 +367,8 @@ void display_matrix(Matrix *m)
     {
         for(int c = 0; c < m->width; c++)
         {
-            if(get(m,r,c) == LONG_MAX) printf("%5c ", 'i');
-            else printf("%5ld ", get(m,r,c));
+            if(get(m,r,c) == LONG_MAX) printf("%c ", 'i');
+            else printf("%ld ", get(m,r,c));
         }
         printf("\n");
     }
