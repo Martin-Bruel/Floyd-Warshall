@@ -37,7 +37,6 @@ void process(Matrix *a, Matrix *b, Matrix *c, int rank, int numprocs);          
 Matrix *matrix_product(Matrix *m1, Matrix *m2);                                                     //retourne le produit matriciel entre a et b
 Matrix *matrix_process(Matrix *m1, Matrix *m2);                                                     //retourne le produit matriciel en remplacant l'opération de multiplication par une addition et l'opération de somme par le minimum 
 void replace(Matrix *a, Matrix *b, int row, int column);                                            //remplace a par la matrice b à l'index donné
-void matrix_transform(Matrix *m);                                                                   //tranforme matrix to add +inf
 
 //Utils
 void set(Matrix *matrix, int row, int column, long value);                                          //assigne la valeur dans la bonne case de la matrice
@@ -49,7 +48,7 @@ void display_matrix(Matrix *m);                                                 
 //Creation matrice
 Matrix *generate_matrix(long *data, int h, int w, bool row_opti);                                   //genere une matrice
 Matrix *create_matrix(int seed, int h, int w, bool row_opti);                                       //creer une matrice 
-Matrix *load_matrix(char *path);                                                                    //charge une matrice depuis un fichier
+Matrix *load_matrix(char *path, int numprocs);                                                      //charge une matrice depuis un fichier en la transformant avec i et l'ajustant pour etre divisible par le nombre de procos
 Matrix *copy_matrix(Matrix *m, bool row_opti);                                                      //copy une matrix avec l'optimisation demandée
 
 //Tests
@@ -85,22 +84,18 @@ int main(int argc, char *argv[])
     }
     if(rank == 0)
     {
-        A = load_matrix(argv[1]);
-        matrix_transform(A);
+        A = load_matrix(argv[1], numprocs);
         N = A->height;
+        B=copy_matrix(A, false);
     }
 
     N = broadcast(N, 0, rank, numprocs);
 
-    for(int i = 0; i < log2(N); i++)
-    {
-        if(rank==0)
-        {
-            B=copy_matrix(A, false);
-        }
+    b = scatter(B, N, false, 0, rank, numprocs);
 
+    for(int i = 0; i < N; i++)
+    {
         a = scatter(A, N, true, 0, rank, numprocs);
-        b = scatter(B, N, false, 0, rank, numprocs);
 
         c = generate_matrix((long *) malloc(size(a)*sizeof(long)), a->height, a->width, a->row_opti);
 
@@ -227,19 +222,17 @@ void process(Matrix *a, Matrix *b, Matrix *c, int rank, int numprocs)
 {
     Matrix *p;
     long *tmp;
-    MPI_Status status;
-    int i = 0;
+    MPI_Status status;    
 
-    //On fait le produit des 2 matrices
-    p = matrix_process(a,b);
-
-    //On remplace dans la matrice résultante la multiplication trouvée
-    //à l'emplacement déterminé celon le rank, l'iteration et la taille d'un bloc
-    replace(c, p, 0, CURRENT(rank+i++,numprocs)*a->width/numprocs);
-    free(p);
-
-    for(; i < numprocs; i++)
+    for(int i = 0; i < numprocs; i++)
     {
+        //On fait le produit des 2 matrices
+        p = matrix_process(a,b);
+
+        //On remplace dans la matrice résultante la multiplication trouvée
+        //à l'emplacement déterminé celon le rank, l'iteration et la taille d'un bloc
+        replace(c, p, 0, CURRENT(rank+i,numprocs)*a->width/numprocs);
+        free(p);
 
         if(rank % 2 == 0)
         {
@@ -253,9 +246,6 @@ void process(Matrix *a, Matrix *b, Matrix *c, int rank, int numprocs)
             MPI_Send(b->array, size(b), MPI_LONG, PREVIOUS(rank, numprocs), GATHER, MPI_COMM_WORLD);
             b->array=tmp;
         }
-        p = matrix_process(a,b);
-        replace(c, p, 0, CURRENT(rank+i,numprocs)*a->width/numprocs);
-        free(p);
     }
     
 }
@@ -327,13 +317,24 @@ void replace(Matrix *a, Matrix *b, int row, int column)
     }
 }
 
-void matrix_transform(Matrix *m)
+void matrix_transform(Matrix *m, int numprocs)
 {
     for(int r = 0; r < m->height; r++)
     {
         for(int c = 0; c < m->width; c++)
         {
             if(r!=c && get(m,r,c) == 0) set(m,r,c,LONG_MAX);
+        }
+    }
+
+    if(m->height % numprocs != 0)
+    {
+        for(int r = 0; r < m->height; r++)
+        {
+            for(int c = 0; c < m->width; c++)
+            {
+                if(r!=c && get(m,r,c) == 0) set(m,r,c,LONG_MAX);
+            }
         }
     }
 }
@@ -363,9 +364,11 @@ int size(Matrix *matrix)
 
 void display_matrix(Matrix *m)
 {
-    for(int r = 0; r < m->height; r++)
+    int Nlimit;
+    for(Nlimit = 0; Nlimit < m->height && get(m, Nlimit, Nlimit) != LONG_MAX; Nlimit++);
+    for(int r = 0; r < Nlimit; r++)
     {
-        for(int c = 0; c < m->width; c++)
+        for(int c = 0; c < Nlimit; c++)
         {
             if(get(m,r,c) == LONG_MAX) printf("%c ", 'i');
             else printf("%ld ", get(m,r,c));
@@ -411,12 +414,12 @@ Matrix *create_matrix(int seed, int h, int w, bool row_opti)
     return m;
 }
 
-Matrix *load_matrix(char *path)
+Matrix *load_matrix(char *path, int numprocs)
 {
     FILE * file;
     long val;
     int size_alloc = 256;
-    int size=0;
+    int size=0, N, Nlimit;
 
     file = fopen(path, "r");
     if(file==NULL) return NULL;
@@ -433,7 +436,43 @@ Matrix *load_matrix(char *path)
         data[size++] = val; 
     }
     fclose(file);
-    Matrix *m = generate_matrix(data, sqrt(size), sqrt(size), true); 
+
+    N = sqrt(size);
+    
+    if(N % numprocs != 0) Nlimit = N + numprocs - (N % numprocs);
+    else Nlimit = N;
+
+    Matrix *m = generate_matrix( (long *) malloc(Nlimit*Nlimit * sizeof(long)), Nlimit, Nlimit, true);
+
+    for(int r = 0; r < N; r++)
+    {
+        for(int c = 0; c <N; c++)
+        {
+            val = data[r*N+c];
+            if(val == 0 && r!=c) set(m,r,c,LONG_MAX);
+            else set(m,r,c,val);
+
+            if(c==N-1)
+            {
+                for(int i = c+1; i < Nlimit; i++)
+                {
+                    set(m,r,i,LONG_MAX);
+                }
+            }
+        }
+
+        if(r==N-1)
+        {
+            for(int i = r+1; i < Nlimit; i++)
+            {
+                for(int c = 0; c <Nlimit; c++)
+                {
+                    set(m,i,c, LONG_MAX);
+                }
+            }
+        }
+    }
+
     return m;
 }
 
@@ -495,31 +534,35 @@ int next_previous_test()
 
 int load_matrix_test()
 {
-    Matrix *m = load_matrix("data/mat_2");
+    Matrix *m = load_matrix("data/mat_2", 1);
     if(m == NULL) return 1;
-    long tab1[16] = {0, 1, 2, 0, 0, 0, 0, 1, 0, 3, 0, 6, 0, 0, 0, 0};
+    long tab1[16] = {0, 1, 2, LONG_MAX, LONG_MAX, 0, LONG_MAX, 1, LONG_MAX, 3, 0, 6, LONG_MAX, LONG_MAX, LONG_MAX, 0};
     if(memcmp(tab1, m->array, 16*sizeof(long))) return 1;
     free(m);
-    m = load_matrix("data/mat_3");
+    m = load_matrix("data/mat_3", 1);
     long tab2[64] = {   
-                        0, 4, 2, 0, 6, 9, 0, 8, 
-                        6, 0, 2, 0, 9, 2, 0, 8, 
-                        2, 1, 0, 8, 4, 0, 4, 2, 
-                        4, 6, 3, 0, 4, 0, 3, 8, 
-                        7, 8, 1, 0, 0, 9, 3, 0, 
-                        3, 8, 8, 1, 8, 0, 0, 7, 
-                        0, 2, 9, 3, 3, 4, 0, 6, 
+                        0, 4, 2, LONG_MAX, 6, 9, LONG_MAX, 8, 
+                        6, 0, 2, LONG_MAX, 9, 2, LONG_MAX, 8, 
+                        2, 1, 0, 8, 4, LONG_MAX, 4, 2, 
+                        4, 6, 3, 0, 4, LONG_MAX, 3, 8, 
+                        7, 8, 1, LONG_MAX, 0, 9, 3, LONG_MAX, 
+                        3, 8, 8, 1, 8, 0, LONG_MAX, 7, 
+                        LONG_MAX, 2, 9, 3, 3, 4, 0, 6, 
                         6, 4, 5, 2, 3, 1, 7, 0 
                     };
     if(memcmp(tab2, m->array, 64*sizeof(long))) return 1;
+    free(m);
+    m = load_matrix("data/mat_1", 4);
+    if(m == NULL) return 1;
+    long tab3[16] = {0, 1, 2, LONG_MAX, 1, 0, LONG_MAX, LONG_MAX, LONG_MAX, 3, 0, LONG_MAX, LONG_MAX, LONG_MAX, LONG_MAX, LONG_MAX};
+    if(memcmp(tab3, m->array, 16*sizeof(long))) return 1;
     free(m);
     return 0;
 }
 
 int matrix_process_test()
 {
-    Matrix *m1 = load_matrix("data/mat_2");
-    matrix_transform(m1);
+    Matrix *m1 = load_matrix("data/mat_2", 1);
     Matrix *m2 = copy_matrix(m1, false);
     Matrix *m3 = matrix_process(m1,m2);
     long tab[16] = {
@@ -537,14 +580,13 @@ int matrix_process_test()
 
 int multi_matrix_process_test()
 {
-    Matrix *m1 = load_matrix("data/mat_3");
-    matrix_transform(m1);
+    Matrix *m1 = load_matrix("data/mat_3", 1);
     for(int i = 0; i < 8; i++)
     {
         Matrix *m2 = copy_matrix(m1, false);
         m1 = matrix_process(m1,m2);
     }
-    Matrix *res = load_matrix("data/result_3");
+    Matrix *res = load_matrix("data/result_3", 1);
     if(memcmp(res->array, m1->array, size(res)*sizeof(long))) return 1;
     return 0;
 }
