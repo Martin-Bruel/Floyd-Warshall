@@ -9,6 +9,9 @@
 #define GATHER 1
 #define SCATTER 2
 #define BROADCAST 3
+#define PROCESS 4
+
+#define TRANSMITTER 0
 
 #define NEXT(r,p) ((r + 1) + p) % p
 #define PREVIOUS(r,p) ((r - 1) + p) % p
@@ -31,7 +34,7 @@ typedef struct Matrix
 int broadcast(int data, int transmitter, int rank, int numprocs);                                   //emmet data sur toutes les machines de l'anneau
 Matrix *scatter(Matrix *data, int size, bool row_opti, int transmitter, int rank, int numprocs);    //transmet une part de data à chaque machine de l'anneau
 Matrix *gather(int transmitter, int rank, int numprocs, Matrix *matrix);                            //transmet chaque part de data à l'emmeteur
-void process(Matrix *a, Matrix *b, Matrix *c, int rank, int numprocs);                              //rempli c avec le tratement de chaque matrice
+Matrix *process(Matrix *a, Matrix *b, int rank, int numprocs);                                      //retourne la matrice traité
 
 //Matrice manipulation
 Matrix *matrix_product(Matrix *m1, Matrix *m2);                                                     //retourne le produit matriciel entre a et b
@@ -64,45 +67,51 @@ int test(int rank, int numprocs);                                               
 int main(int argc, char *argv[])
 {
     int rank, numprocs, N;
-    Matrix *A, *B, *a, *b, *c;
+    Matrix *A, *B, *a, *b;
 
+    //initialisation de MPI
     MPI_Init(&argc, &argv);
     MPI_Comm_size(MPI_COMM_WORLD, &numprocs);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
+    //vérifie si il y a le bon nombre d'argument
     if(argc != 2) 
     {
         if(rank == 0) printf("Program is call with wrong numbers of argument... exit\n");
         MPI_Finalize();
         return 0;
     }
+
+    //lance les tests
     if(strcmp(argv[1],"test")==0)
     {
         test(rank, numprocs);
         MPI_Finalize();
         return 0;
     }
-    if(rank == 0)
+
+    //lit la matrice si il s'agit de l'emmetteur et en déduit A, B et N
+    if(rank == TRANSMITTER)
     {
         A = load_matrix(argv[1], numprocs);
         N = A->height;
         B=copy_matrix(A, false);
     }
 
+    //transmet N à toutes les machines du réseau
     N = broadcast(N, 0, rank, numprocs);
 
+    //transmet un bloc de B a chaque machine du réseau
     b = scatter(B, N, false, 0, rank, numprocs);
+    a = scatter(A, N, true, 0, rank, numprocs);
 
-    for(int i = 0; i < N; i++)
-    {
-        a = scatter(A, N, true, 0, rank, numprocs);
+    //multiplie a avec b
+    for(int i = 0; i < N; i++) a = process(a,b,rank,numprocs);
 
-        c = generate_matrix((long *) malloc(size(a)*sizeof(long)), a->height, a->width, a->row_opti);
+    //assemble a pour reconstituer la matrice finale
+    A = gather(0,rank,numprocs,a);
 
-        process(a,b,c,rank,numprocs);        
-    
-        A = gather(0,rank,numprocs,c);
-    }
+    //affiche le résultat
     if(rank == 0) display_matrix(A);
     
     MPI_Finalize();
@@ -207,7 +216,7 @@ Matrix *gather(int transmitter, int rank, int numprocs, Matrix *matrix)
     //On envoie leurs blocks 
     else
     {
-        MPI_Send(block, block_size, MPI_LONG, (rank+1) % numprocs, GATHER, MPI_COMM_WORLD);
+        MPI_Send(block, block_size, MPI_LONG, NEXT(rank, numprocs), GATHER, MPI_COMM_WORLD);
         for(int i = numprocs - rank; i < numprocs - 1; i++)
         {
             MPI_Recv(block, block_size, MPI_LONG, PREVIOUS(rank, numprocs), GATHER, MPI_COMM_WORLD, &status);
@@ -218,12 +227,17 @@ Matrix *gather(int transmitter, int rank, int numprocs, Matrix *matrix)
 }
 
 
-void process(Matrix *a, Matrix *b, Matrix *c, int rank, int numprocs)
+Matrix *process(Matrix *a, Matrix *b, int rank, int numprocs)
 {
     Matrix *p;
     long *tmp;
-    MPI_Status status;    
+    MPI_Status status; 
+    Matrix *c = generate_matrix((long *) malloc(size(a)*sizeof(long)), a->height, a->width, a->row_opti);
 
+    //Pour chaque procos on traite la matrice
+    //  On ajoute le résultat dans la matrice final
+    //  Si on est pair, on envoie et on receprionne la matrice b
+    //  Si on est impaire, on receprionne et on envoie la matrice b
     for(int i = 0; i < numprocs; i++)
     {
         //On fait le produit des 2 matrices
@@ -231,23 +245,23 @@ void process(Matrix *a, Matrix *b, Matrix *c, int rank, int numprocs)
 
         //On remplace dans la matrice résultante la multiplication trouvée
         //à l'emplacement déterminé celon le rank, l'iteration et la taille d'un bloc
-        replace(c, p, 0, CURRENT(rank+i,numprocs)*a->width/numprocs);
+        replace(c, p, 0, CURRENT(rank-i,numprocs)*a->width/numprocs);
         free(p);
 
         if(rank % 2 == 0)
         {
-            MPI_Send(b->array, size(b), MPI_LONG, PREVIOUS(rank, numprocs), GATHER, MPI_COMM_WORLD);
-            MPI_Recv(b->array, size(b), MPI_LONG, NEXT(rank, numprocs), GATHER, MPI_COMM_WORLD, &status);
+            MPI_Send(b->array, size(b), MPI_LONG, NEXT(rank, numprocs), PROCESS, MPI_COMM_WORLD);
+            MPI_Recv(b->array, size(b), MPI_LONG, PREVIOUS(rank, numprocs), PROCESS, MPI_COMM_WORLD, &status);
         }
         else
         {
             tmp = (long *) malloc(size(b)*sizeof(long));
-            MPI_Recv(tmp, size(b), MPI_LONG, NEXT(rank, numprocs), GATHER, MPI_COMM_WORLD, &status);
-            MPI_Send(b->array, size(b), MPI_LONG, PREVIOUS(rank, numprocs), GATHER, MPI_COMM_WORLD);
+            MPI_Recv(tmp, size(b), MPI_LONG, PREVIOUS(rank, numprocs), PROCESS, MPI_COMM_WORLD, &status);
+            MPI_Send(b->array, size(b), MPI_LONG, NEXT(rank, numprocs), PROCESS, MPI_COMM_WORLD);
             b->array=tmp;
         }
     }
-    
+    return c;
 }
 
 
@@ -258,7 +272,7 @@ void process(Matrix *a, Matrix *b, Matrix *c, int rank, int numprocs)
 //-----------------------------------------------------------------
 Matrix *matrix_product(Matrix *m1, Matrix *m2)
 {
-    if(m1->width!=m2->height) return NULL;
+    //genere une matrice avec pour hauteur m1 et pour largeur m2
     Matrix *res = generate_matrix((long *) malloc(m1->height*m2->width*sizeof(long)), m1->height, m2->width, true);
     int n=m1->height, p=m1->width, m=m2->width;
     for(int r = 0; r < n; r++)
@@ -279,9 +293,11 @@ Matrix *matrix_product(Matrix *m1, Matrix *m2)
 
 Matrix *matrix_process(Matrix *m1, Matrix *m2)
 {
-    if(m1->width!=m2->height) return NULL;
+    //genere une matrice avec pour hauteur m1 et pour largeur m2
     Matrix *res = generate_matrix((long *) malloc(m1->height*m2->width*sizeof(long)), m1->height, m2->width, true);
     int n=m1->height, p=m1->width, m=m2->width;
+
+    //remplace dans la multiplication classique de matrice l'opération de multiplication par une addition et l'opération de somme par le minimum 
     for(int r = 0; r < n; r++)
     {
         for (int c = 0; c < m; c++)
@@ -289,13 +305,10 @@ Matrix *matrix_process(Matrix *m1, Matrix *m2)
             long min = LONG_MAX, curr;
             for (int i = 0; i < p; i++)
             {
-                
                 if(get(m1,r,i) == LONG_MAX || get(m2,i,c) == LONG_MAX) curr = LONG_MAX;
                 else curr = get(m1,r,i)+get(m2,i,c);
-                min = min<curr ? min:curr;  
-                //printf("calc(%d,%d,%d) : %ld + %ld -> %ld\n",r,c,i,get(m1,r,i),get(m2,i,c),curr);
+                min = min<curr ? min:curr;
             }
-            
             set(res,r,c,min);
         }
     }
@@ -305,6 +318,7 @@ Matrix *matrix_process(Matrix *m1, Matrix *m2)
 
 void replace(Matrix *a, Matrix *b, int row, int column)
 {
+    //remplace aux coordonnées row colums et aux suivantes les valeurs de a par celles de b 
     int rb = 0, cb = 0;
     for(int ra = row; ra < b->height+row; ra++)
     {   
@@ -317,28 +331,6 @@ void replace(Matrix *a, Matrix *b, int row, int column)
     }
 }
 
-void matrix_transform(Matrix *m, int numprocs)
-{
-    for(int r = 0; r < m->height; r++)
-    {
-        for(int c = 0; c < m->width; c++)
-        {
-            if(r!=c && get(m,r,c) == 0) set(m,r,c,LONG_MAX);
-        }
-    }
-
-    if(m->height % numprocs != 0)
-    {
-        for(int r = 0; r < m->height; r++)
-        {
-            for(int c = 0; c < m->width; c++)
-            {
-                if(r!=c && get(m,r,c) == 0) set(m,r,c,LONG_MAX);
-            }
-        }
-    }
-}
-
 
 
 
@@ -347,25 +339,33 @@ void matrix_transform(Matrix *m, int numprocs)
 //-----------------------------------------------------------------
 void set(Matrix *matrix, int row, int column, long value)
 {
+    //change la valeur aux coordonnées row column
+    //la position dans la memoire est determinée en foction de l'optimisation
     if(matrix->row_opti) matrix->array[row*matrix->width+column]=value;
     else matrix->array[column*matrix->height+row]=value;
 }
 
 long get(Matrix *matrix, int row, int column)
 {
+    //retourne la valeur aux coordonnées row column
+    //la position dans la memoire est determinée en foction de l'optimisation
     if(matrix->row_opti) return matrix->array[row*matrix->width+column];
     else return matrix->array[column*matrix->height+row];
 }
 
 int size(Matrix *matrix)
 {
+    //retourne le nombre de données dans la matrice
     return matrix->width*matrix->height;
 }
 
 void display_matrix(Matrix *m)
 {
     int Nlimit;
+    //créer un délimiteur pour ne pas afficher les colonnes et lignes qui ont été ajoutées pour s'adapter au nombre de processeurs
     for(Nlimit = 0; Nlimit < m->height && get(m, Nlimit, Nlimit) != LONG_MAX; Nlimit++);
+    
+    //affiche la matrice ligne par ligne avec chaque valeur séparées par une espace
     for(int r = 0; r < Nlimit; r++)
     {
         for(int c = 0; c < Nlimit; c++)
@@ -391,6 +391,7 @@ void display_array(long *array, int size)
 //-----------------------------------------------------------------
 Matrix *generate_matrix(long *data, int h, int w, bool row_opti)
 {
+    //génere une matrice en mémoire avec les données data
     Matrix *m = (Matrix *) malloc(sizeof(Matrix));
     m->height=h;
     m->width=w;
@@ -401,6 +402,7 @@ Matrix *generate_matrix(long *data, int h, int w, bool row_opti)
 
 Matrix *create_matrix(int seed, int h, int w, bool row_opti)
 {
+    //créer une matrice avec des valeurs tests
     Matrix *m = generate_matrix((long *) malloc(h*w*sizeof(long)), h,w,row_opti);
     int i = seed+1;
 
@@ -426,6 +428,8 @@ Matrix *load_matrix(char *path, int numprocs)
 
     long *data = (long *) malloc(size_alloc*sizeof(long));
 
+    //lit toutes les données et les range dans le tableau data
+    //alloue de la mémoire suplémentaire si necessaire
     while(fscanf(file, " %ld", &val) == 1)
     {
         if(size == size_alloc)
@@ -442,8 +446,12 @@ Matrix *load_matrix(char *path, int numprocs)
     if(N % numprocs != 0) Nlimit = N + numprocs - (N % numprocs);
     else Nlimit = N;
 
+    //Génere une matrice qui est divisible par le nombre de processeur
     Matrix *m = generate_matrix( (long *) malloc(Nlimit*Nlimit * sizeof(long)), Nlimit, Nlimit, true);
 
+    
+    //Ajoute des valeurs infinie lorsque il yu a un 0 et que celui-ci ne se trouve pas en diagonal
+    //Ajoute des valeurs infinie pour TOUTES les valeur ajouter pour s'adapter au nombre de processeurs
     for(int r = 0; r < N; r++)
     {
         for(int c = 0; c <N; c++)
@@ -481,6 +489,7 @@ Matrix *copy_matrix(Matrix *m, bool row_opti)
 {
     Matrix *copy = generate_matrix((long *) malloc(size(m)*sizeof(long)), m->height, m->width, row_opti);
     
+    //copy chaque valeurs de m dans la nouvelle matrice en respectant l'optimisation de colonne
     for(int r = 0; r < m->height; r++)
     {
         for(int c = 0; c < m->width; c++)
