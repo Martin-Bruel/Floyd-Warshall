@@ -12,7 +12,8 @@ srcFolder="src/"
 # Change number of processors
 #np = 3
 np =4
-datasets=[2,3,4,5,13,18,100]
+datasets=[2,3,4, 5,9,13,18,76,87,100,131, 150]
+#datasets=[76]
 
 
 def check_output(resultFile, output) :

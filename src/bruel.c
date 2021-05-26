@@ -30,32 +30,33 @@ typedef struct Matrix
 //-------------------------DECLARATION-----------------------------
 //-----------------------------------------------------------------
 
+// // -> implémentée en parallele avec open mp
+
 //Fonctions de haut niveau
-int broadcast(int data, int transmitter, int rank, int numprocs);                                   //emmet data sur toutes les machines de l'anneau
-Matrix *scatter(Matrix *data, int size, bool row_opti, int transmitter, int rank, int numprocs);    //transmet une part de data à chaque machine de l'anneau
-Matrix *gather(int transmitter, int rank, int numprocs, Matrix *matrix);                            //transmet chaque part de data à l'emmeteur
-Matrix *process(Matrix *a, Matrix *b, int rank, int numprocs);                                      //retourne la matrice traité
+int broadcast(int data, int transmitter, int rank, int numprocs);                                       //emmet data sur toutes les machines de l'anneau
+Matrix *scatter(Matrix *data, int size, bool row_opti, int transmitter, int rank, int numprocs);        //transmet une part de data à chaque machine de l'anneau
+Matrix *gather(int transmitter, int rank, int numprocs, Matrix *matrix);                                //transmet chaque part de data à l'emmeteur
+Matrix *process(Matrix *a, Matrix *b, int rank, int numprocs);                                          //retourne la matrice traité
 
 //Matrice manipulation
-Matrix *matrix_product(Matrix *m1, Matrix *m2);                                                     //retourne le produit matriciel entre a et b
-Matrix *matrix_process(Matrix *m1, Matrix *m2);                                                     //retourne le produit matriciel en remplacant l'opération de multiplication par une addition et l'opération de somme par le minimum 
-void replace(Matrix *a, Matrix *b, int row, int column);                                            //remplace a par la matrice b à l'index donné
+Matrix *matrix_process(Matrix *m1, Matrix *m2);                                                     //  //retourne le produit matriciel en remplacant l'opération de multiplication par une addition et l'opération de somme par le minimum 
+void replace(Matrix *a, Matrix *b, int row, int column);                                            //  //remplace a par la matrice b à l'index donné
 
 //Utils
-void set(Matrix *matrix, int row, int column, long value);                                          //assigne la valeur dans la bonne case de la matrice
-long get(Matrix *matrix, int row, int column);                                                      //retourne la valeur à la case correspondance
-int size(Matrix *matrix);                                                                           //retourne le nombre d'element d'une matrice
-void display_array(long *array, int size);                                                          //affiche le tableau
-void display_matrix(Matrix *m);                                                                     //affiche la matrice
+void set(Matrix *matrix, int row, int column, long value);                                              //assigne la valeur dans la bonne case de la matrice
+long get(Matrix *matrix, int row, int column);                                                          //retourne la valeur à la case correspondance
+int size(Matrix *matrix);                                                                               //retourne le nombre d'element d'une matrice
+void display_array(long *array, int size);                                                              //affiche le tableau
+void display_matrix(Matrix *m);                                                                         //affiche la matrice en supprimant les ajouts eventuelle. a utiliser seulement pour la matrice final
 
 //Creation matrice
-Matrix *generate_matrix(long *data, int h, int w, bool row_opti);                                   //genere une matrice
-Matrix *create_matrix(int seed, int h, int w, bool row_opti);                                       //creer une matrice 
-Matrix *load_matrix(char *path, int numprocs);                                                      //charge une matrice depuis un fichier en la transformant avec i et l'ajustant pour etre divisible par le nombre de procos
-Matrix *copy_matrix(Matrix *m, bool row_opti);                                                      //copy une matrix avec l'optimisation demandée
+Matrix *generate_matrix(long *data, int h, int w, bool row_opti);                                       //genere une matrice
+Matrix *create_matrix(int seed, int h, int w, bool row_opti);                                           //creer une matrice 
+Matrix *load_matrix(char *path, int numprocs);                                                      //  //charge une matrice depuis un fichier en la transformant avec i et l'ajustant pour etre divisible par le nombre de procos
+Matrix *copy_matrix(Matrix *m, bool row_opti);                                                      //  //copy une matrix avec l'optimisation demandée
 
 //Tests
-int test(int rank, int numprocs);                                                                   //tests
+int test(int rank, int numprocs);                                                                       //tests
 
 
 
@@ -270,27 +271,6 @@ Matrix *process(Matrix *a, Matrix *b, int rank, int numprocs)
 //-----------------------------------------------------------------
 //--------------------MANIPULATION DE MATRICE----------------------
 //-----------------------------------------------------------------
-Matrix *matrix_product(Matrix *m1, Matrix *m2)
-{
-    //genere une matrice avec pour hauteur m1 et pour largeur m2
-    Matrix *res = generate_matrix((long *) malloc(m1->height*m2->width*sizeof(long)), m1->height, m2->width, true);
-    int n=m1->height, p=m1->width, m=m2->width;
-    for(int r = 0; r < n; r++)
-    {
-        for (int c = 0; c < m; c++)
-        {
-            int tmp=0;
-            for (int i = 0; i < p; i++)
-            {
-                tmp += get(m1,r,i) *get(m2,i,c);   
-            }
-            set(res,r,c,tmp);
-        }
-    }
-    return res;
-}
-
-
 Matrix *matrix_process(Matrix *m1, Matrix *m2)
 {
     //genere une matrice avec pour hauteur m1 et pour largeur m2
@@ -298,6 +278,7 @@ Matrix *matrix_process(Matrix *m1, Matrix *m2)
     int n=m1->height, p=m1->width, m=m2->width;
 
     //remplace dans la multiplication classique de matrice l'opération de multiplication par une addition et l'opération de somme par le minimum 
+    #pragma omp parallel for
     for(int r = 0; r < n; r++)
     {
         for (int c = 0; c < m; c++)
@@ -319,15 +300,14 @@ Matrix *matrix_process(Matrix *m1, Matrix *m2)
 void replace(Matrix *a, Matrix *b, int row, int column)
 {
     //remplace aux coordonnées row colums et aux suivantes les valeurs de a par celles de b 
-    int rb = 0, cb = 0;
-    for(int ra = row; ra < b->height+row; ra++)
+    int n=b->height, m=b->width;
+    #pragma omp parallel for
+    for(int rb=0; rb < n; rb++)
     {   
-        for(int ca = column; ca < b->width+column; ca++)
+        for(int cb = 0; cb < m; cb++)
         {
-            set(a, ra, ca, get(b,rb,cb++));
+            set(a, rb+row, cb+column, get(b,rb,cb));
         }
-        cb = 0;
-        rb++;
     }
 }
 
@@ -452,8 +432,10 @@ Matrix *load_matrix(char *path, int numprocs)
     
     //Ajoute des valeurs infinie lorsque il yu a un 0 et que celui-ci ne se trouve pas en diagonal
     //Ajoute des valeurs infinie pour TOUTES les valeur ajouter pour s'adapter au nombre de processeurs
+    #pragma omp parallel for
     for(int r = 0; r < N; r++)
     {
+        int val;
         for(int c = 0; c <N; c++)
         {
             val = data[r*N+c];
@@ -490,9 +472,11 @@ Matrix *copy_matrix(Matrix *m, bool row_opti)
     Matrix *copy = generate_matrix((long *) malloc(size(m)*sizeof(long)), m->height, m->width, row_opti);
     
     //copy chaque valeurs de m dans la nouvelle matrice en respectant l'optimisation de colonne
-    for(int r = 0; r < m->height; r++)
+    int limit1 = m->height, limit2 = m->width;
+    #pragma omp parallel for
+    for(int r = 0; r < limit1; r++)
     {
-        for(int c = 0; c < m->width; c++)
+        for(int c = 0; c < limit2; c++)
         {
             set(copy,r,c,get(m,r,c));
         }

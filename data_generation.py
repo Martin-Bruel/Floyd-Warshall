@@ -19,10 +19,11 @@ def generate_matrix():
             if j == i:
                 G[i][j] = 0
             else :
-                if randint(0,3) != 0:
-                    G[i][j] = randint(0,100)
-                else :
+                if randint(0,30) != 0:
                     G[i][j] = 0
+                else :
+                    G[i][j] = randint(0,100)
+                    
     return G
 
 

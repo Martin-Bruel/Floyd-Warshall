@@ -1,0 +1,13 @@
+# READ ME
+
+### Foncitons implémentées
+Calcul plus court chemin avec N multiple de P -> OK
+Gestion des matrices très grandes et calcul long  -> OK
+Gestion du déséquilibre dans le calcul, i.e N non multiple de P -> OK
+Gestion de N < P -> OK
+
+### Methodes implémentées en parallèle avec openMP :
+Matrix *matrix_process(Matrix *m1, Matrix *m2);             //boucle exterieur
+void replace(Matrix *a, Matrix *b, int row, int column);    //boucle exterieur
+Matrix *load_matrix(char *path, int numprocs);              //2e boucle exterieur permettant le formattage de la matrice
+Matrix *copy_matrix(Matrix *m, bool row_opti);              //boucle exterieur
