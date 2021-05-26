@@ -77,7 +77,7 @@ int main(int argc, char *argv[])
     //vérifie si il y a le bon nombre d'argument
     if(argc != 2) 
     {
-        if(rank == 0) printf("Program is call with wrong numbers of argument... exit\n");
+        if(rank == TRANSMITTER) printf("Program is call with wrong numbers of argument... exit\n");
         MPI_Finalize();
         return 0;
     }
@@ -99,20 +99,19 @@ int main(int argc, char *argv[])
     }
 
     //transmet N à toutes les machines du réseau
-    N = broadcast(N, 0, rank, numprocs);
-
+    N = broadcast(N, TRANSMITTER, rank, numprocs);
     //transmet un bloc de B a chaque machine du réseau
-    b = scatter(B, N, false, 0, rank, numprocs);
-    a = scatter(A, N, true, 0, rank, numprocs);
+    b = scatter(B, N, false, TRANSMITTER, rank, numprocs);
+    a = scatter(A, N, true, TRANSMITTER, rank, numprocs);
 
     //multiplie a avec b
     for(int i = 0; i < N; i++) a = process(a,b,rank,numprocs);
 
     //assemble a pour reconstituer la matrice finale
-    A = gather(0,rank,numprocs,a);
+    A = gather(TRANSMITTER,rank,numprocs,a);
 
     //affiche le résultat
-    if(rank == 0) display_matrix(A);
+    if(rank == TRANSMITTER) display_matrix(A);
     
     MPI_Finalize();
     return 0;
@@ -158,10 +157,11 @@ Matrix *scatter(Matrix *data, int size, bool row_opti, int transmitter, int rank
         for(int p = 1; p < numprocs; p++)
         {
             //calcule du bloc à envoyé (le dernier bloc est envoyé en premier)
-            block = data->array + (numprocs-p) * block_size;                                             
+            block = data->array + CURRENT(rank-p, numprocs) * block_size;                                             
             MPI_Send(block, block_size, MPI_LONG, NEXT(rank, numprocs), SCATTER, MPI_COMM_WORLD);
         }
-        block = (long *)realloc(data->array, sizeof(long) * block_size);
+        block = (long *) malloc(sizeof(long) * block_size);
+        memmove(block,data->array + CURRENT(rank, numprocs)* block_size, block_size * sizeof(long));
         free(data);
     }
 
@@ -174,7 +174,7 @@ Matrix *scatter(Matrix *data, int size, bool row_opti, int transmitter, int rank
         MPI_Get_count(&status, MPI_LONG, &block_size);
         block = (long *) malloc(sizeof(long) * block_size);
 
-        for(int i = rank; i < numprocs - 1; i++)
+        for(int i = rank; i != PREVIOUS(transmitter,numprocs); i=NEXT(i,numprocs))
         {
             MPI_Recv(block, block_size, MPI_LONG, PREVIOUS(rank, numprocs), SCATTER, MPI_COMM_WORLD, &status);
             MPI_Send(block, block_size, MPI_LONG, NEXT(rank, numprocs), SCATTER, MPI_COMM_WORLD);
@@ -203,12 +203,12 @@ Matrix *gather(int transmitter, int rank, int numprocs, Matrix *matrix)
     {
         int size = block_size*numprocs;
         result = generate_matrix(malloc(size*sizeof(long)),matrix->width, matrix->width, true);
-        memmove(result->array,block, block_size * sizeof(long));
-        for(int p = 1; p < numprocs; p++)
+        memmove(result->array  + rank * block_size,block, block_size * sizeof(long));
+        for(int i = PREVIOUS(rank,numprocs); i != CURRENT(rank,numprocs); i=PREVIOUS(i,numprocs))
         {
             MPI_Recv(block, block_size, MPI_LONG, PREVIOUS(rank, numprocs), GATHER, MPI_COMM_WORLD, &status);
-            memmove(result->array + (numprocs-p) * block_size, block, block_size  * sizeof(long));
-        }
+            memmove(result->array + i * block_size, block, block_size  * sizeof(long));
+        }  
     }
     //Dans le cas ou on est une autre machine
     //On envoie notre block au suivant
@@ -217,7 +217,7 @@ Matrix *gather(int transmitter, int rank, int numprocs, Matrix *matrix)
     else
     {
         MPI_Send(block, block_size, MPI_LONG, NEXT(rank, numprocs), GATHER, MPI_COMM_WORLD);
-        for(int i = numprocs - rank; i < numprocs - 1; i++)
+        for(int i = rank; i != NEXT(transmitter,numprocs); i=PREVIOUS(i,numprocs))
         {
             MPI_Recv(block, block_size, MPI_LONG, PREVIOUS(rank, numprocs), GATHER, MPI_COMM_WORLD, &status);
             MPI_Send(block, block_size, MPI_LONG, NEXT(rank, numprocs), GATHER, MPI_COMM_WORLD);
@@ -617,7 +617,7 @@ int run_test(char *test_name, int (*test_fnct)(), int id)
 int test(int rank, int numprocs)  
 {
     int nb_failed = 0, id = 0;
-    if(rank==0)
+    if(rank==TRANSMITTER)
     {
         nb_failed+=run_test("replace", replace_test, ++id);
         nb_failed+=run_test("next_previous", next_previous_test, ++id);
