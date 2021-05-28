@@ -1,6 +1,6 @@
 # READ ME
 
-### Foncitons implémentées
+### Foncitons implémentées (Toutes)
 Calcul plus court chemin avec N multiple de P -> OK
 Gestion des matrices très grandes et calcul long  -> OK
 Gestion du déséquilibre dans le calcul, i.e N non multiple de P -> OK
